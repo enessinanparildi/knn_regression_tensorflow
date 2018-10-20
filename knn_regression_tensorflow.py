@@ -4,13 +4,13 @@ import matplotlib.pyplot as py
 
 def make_dataset():
     np.random.seed(521)
-    Data = np.linspace(1.0, 10.0, num=1000)[:, np.newaxis]
-    Target = np.sin(Data) + 0.1 * np.power(Data, 2) + 0.5 * np.random.randn(1000, 1)
-    randIdx = np.arange(1000)
+    Data = np.linspace(1.0, 10.0, num=10000)[:, np.newaxis]
+    Target = np.sin(Data) + 0.1 * np.power(Data, 2) + 0.5 * np.random.randn(10000, 1)
+    randIdx = np.arange(10000)
     np.random.shuffle(randIdx)
-    traindata = Data[randIdx[:800]], Target[randIdx[:800]]
-    validdata = Data[randIdx[800:900]], Target[randIdx[800:900]]
-    testdata = Data[randIdx[900:1000]], Target[randIdx[900:1000]]
+    traindata = Data[randIdx[:8000]], Target[randIdx[:8000]]
+    validdata = Data[randIdx[8000:9000]], Target[randIdx[8000:9000]]
+    testdata = Data[randIdx[9000:10000]], Target[randIdx[9000:10000]]
     return traindata, validdata, testdata
 
 
@@ -46,7 +46,7 @@ def softresponsibility(D,lambd,graph):
         expdistance = tf.exp(-lambd*D)
         wholesum = tf.reduce_sum(expdistance)
         normalizedexp = tf.divide(expdistance,wholesum)
-    return normalizedexp
+        return normalizedexp
 
 
 
@@ -54,14 +54,19 @@ def mseloss(prediction, target):
     return tf.losses.mean_squared_error(prediction, target)
 
 
-def main_operation(i, distancesettrain, kvalue, n_train, training_target, graph):
+def main_operation(i, distancesettrain, kvalue,lambdaval, n_train, training_target, graph, mode = 'hard'):
     with graph.as_default():
-        resp = tf.reshape(responsibility(-1 * distancesettrain[:, i], kvalue, graph), [n_train, 1])
-        val = tf.reshape(tf.matmul(tf.transpose(tf.cast(training_target, dtype=tf.float32)), resp), [1])
+        if mode == 'hard':
+            resp = tf.reshape(responsibility(-1 * distancesettrain[:, i], kvalue, graph), [n_train, 1])
+            val = tf.reshape(tf.matmul(tf.transpose(tf.cast(training_target, dtype=tf.float32)), resp), [1])
+        else:
+            resp = tf.reshape(softresponsibility(distancesettrain[:, i], lambdaval, graph), [n_train, 1])
+            val = tf.reshape(tf.matmul(tf.transpose(tf.cast(training_target, dtype=tf.float32)), resp), [1])
+
         return val
 
 
-def main_graph(traindata, validdata, testdata, kset):
+def main_graph(traindata, validdata, testdata, kset,lambdaval):
     tf.reset_default_graph()
     graph = tf.Graph()
     with graph.as_default():
@@ -76,7 +81,7 @@ def main_graph(traindata, validdata, testdata, kset):
 
         distancesettrain = euclid_distance(training_dataset, dataset)
 
-        results = tf.map_fn(lambda i: main_operation(i, distancesettrain, kvalue, n_train, training_target, graph),
+        results = tf.map_fn(lambda i: main_operation(i, distancesettrain, kvalue,lambdaval ,n_train, training_target, graph),
                             tf.range(tf.shape(dataset)[0]), dtype=(tf.float32))
 
         loss = mseloss(target, results)
@@ -104,13 +109,13 @@ def main_graph(traindata, validdata, testdata, kset):
                                                                   dataset: testdata[0],
                                                                   target: testdata[1].astype(np.float32)})
 
-    return testloss, testpred
+    return testloss, testpred , chosenk
 
 
-def plot_results(testdata, testpred):
+def plot_results(testdata, testpred, chosenk):
     py.scatter(testdata[0], testpred, s=5, c='g')
     py.scatter(testdata[0], testdata[1], s=5, c='b')
-    py.title('k = 50')
+    py.title('k = ' + str(chosenk))
     py.xlabel('Data')
     py.ylabel('Target')
     py.grid(True)
