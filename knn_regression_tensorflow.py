@@ -34,7 +34,7 @@ def euclid_distance(X, Z):
 
 
 # responsibility for  single test point
-def responsibility(D, k, graph):
+def hardresponsibility(D, k, graph):
     with graph.as_default():
         length = tf.shape(D)
         (maxkvals, maxkindicis) = tf.nn.top_k(D, k)
@@ -54,19 +54,26 @@ def mseloss(prediction, target):
     return tf.losses.mean_squared_error(prediction, target)
 
 
-def main_operation(i, distancesettrain, kvalue,lambdaval, n_train, training_target, graph, mode = 'hard'):
+def main_operation(i, distancesettrain, kvalue, lambdaval, n_train, training_target, graph, hard_mode):
     with graph.as_default():
-        if mode == 'hard':
-            resp = tf.reshape(responsibility(-1 * distancesettrain[:, i], kvalue, graph), [n_train, 1])
-            val = tf.reshape(tf.matmul(tf.transpose(tf.cast(training_target, dtype=tf.float32)), resp), [1])
-        else:
-            resp = tf.reshape(softresponsibility(distancesettrain[:, i], lambdaval, graph), [n_train, 1])
-            val = tf.reshape(tf.matmul(tf.transpose(tf.cast(training_target, dtype=tf.float32)), resp), [1])
+        finalval = tf.cond(hard_mode, lambda: hard_op(distancesettrain[:,i], kvalue, graph, training_target, n_train),
+                                      lambda: soft_op(distancesettrain[:,i], lambdaval, graph, training_target, n_train))
+    return finalval
 
-        return val
+def hard_op(distances,kvalue,graph,training_target,n_train):
+    with graph.as_default():
+        resp = tf.reshape(hardresponsibility(-1 * distances, kvalue, graph), [n_train, 1])
+        val = tf.reshape(tf.matmul(tf.transpose(tf.cast(training_target, dtype=tf.float32)), resp), [1])
+    return val
+
+def soft_op(distances,lvalue,graph,training_target,n_train):
+    with graph.as_default():
+        resp = tf.reshape(softresponsibility(distances, lvalue, graph), [n_train, 1])
+        val = tf.reshape(tf.matmul(tf.transpose(tf.cast(training_target, dtype=tf.float32)), resp), [1])
+    return val
 
 
-def main_graph(traindata, validdata, testdata, kset,lambdaval):
+def main_graph(traindata, validdata, testdata, kset, lambdaset):
     tf.reset_default_graph()
     graph = tf.Graph()
     with graph.as_default():
@@ -75,13 +82,15 @@ def main_graph(traindata, validdata, testdata, kset,lambdaval):
         training_dataset = tf.convert_to_tensor(traindata[0], dtype=tf.float32)
         training_target = tf.convert_to_tensor(traindata[1], dtype=tf.float32)
 
-        kvalue = tf.placeholder(dtype=tf.int32, shape=())
+        hard_mode = tf.placeholder(dtype=tf.bool, shape=())
+        lvalue = tf.placeholder_with_default(input = tf.zeros((),dtype=tf.float32) ,  shape=())
+        kvalue = tf.placeholder_with_default(input = tf.zeros((),dtype=tf.int32),  shape=())
         dataset = tf.placeholder(dtype=tf.float32, shape=(None, 1))
         target = tf.placeholder(dtype=tf.float32, shape=[None,1])
 
         distancesettrain = euclid_distance(training_dataset, dataset)
 
-        results = tf.map_fn(lambda i: main_operation(i, distancesettrain, kvalue,lambdaval ,n_train, training_target, graph),
+        results = tf.map_fn(lambda i: main_operation(i, distancesettrain, kvalue,  lvalue , n_train, training_target, graph,hard_mode),
                             tf.range(tf.shape(dataset)[0]), dtype=(tf.float32))
 
         loss = mseloss(target, results)
@@ -90,26 +99,51 @@ def main_graph(traindata, validdata, testdata, kset,lambdaval):
 
     with tf.Session(graph=graph) as sess:
         sess.run(init)
+        datatargets = traindata[1].astype(np.float32)
+
         traininglossset = np.zeros(len(kset))
         validationlossset = np.zeros(len(kset))
-        datatargets = traindata[1].astype(np.float32)
 
 
         for index, k in enumerate(kset):
             traininglossset[index] = sess.run(loss, feed_dict={kvalue: k,
-                                                                 dataset: traindata[0],
-                                                                 target:datatargets })
+                                                               hard_mode:True,
+                                                               dataset: traindata[0],
+                                                               target:datatargets })
         # # validation loop
         for index, k in enumerate(kset):
             validationlossset[index] = sess.run(loss, feed_dict={kvalue: k,
+                                                                 hard_mode: True,
                                                                  dataset: validdata[0],
                                                                  target: validdata[1].astype(np.float32)})
         chosenk = kset[np.argmin(validationlossset)]
-        testloss, testpred = sess.run([loss, results], feed_dict={kvalue: chosenk,
+        testlosshard, testpredhard = sess.run([loss, results], feed_dict={kvalue: chosenk,
+                                                                  hard_mode: True,
                                                                   dataset: testdata[0],
                                                                   target: testdata[1].astype(np.float32)})
 
-    return testloss, testpred , chosenk
+        traininglossset = np.zeros(len(lambdaset))
+        validationlossset = np.zeros(len(lambdaset))
+
+
+        for index, l in enumerate(lambdaset):
+            traininglossset[index] = sess.run(loss, feed_dict={lvalue: l,
+                                                               hard_mode:False,
+                                                               dataset: traindata[0],
+                                                               target:datatargets })
+        # # validation loop
+        for index, l in enumerate(lambdaset):
+            validationlossset[index] = sess.run(loss, feed_dict={lvalue: l,
+                                                                 hard_mode:False,
+                                                                 dataset: validdata[0],
+                                                                 target: validdata[1].astype(np.float32)})
+        chosenl = lambdaset[np.argmin(validationlossset)]
+        testlosssoft, testpredsoft = sess.run([loss, results], feed_dict={lvalue: chosenl,
+                                                                          hard_mode:False,
+                                                                          dataset: testdata[0],
+                                                                          target: testdata[1].astype(np.float32)})
+
+    return testlosshard, testpredhard,testlosssoft, testpredsoft, chosenk , chosenl
 
 
 def plot_results(testdata, testpred, chosenk):
